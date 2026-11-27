@@ -256,20 +256,29 @@ img { max-width: 100%; }
 .tooltip {
   position: fixed;
   z-index: 80;
-  max-width: min(320px, calc(100vw - 16px));
-  max-height: min(220px, calc(100dvh - 16px));
+  max-width: min(300px, calc(100vw - 16px));
+  max-height: min(340px, calc(100dvh - 16px));
   overflow: auto;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: #1a1214;
   color: var(--parchment);
   border: 1px solid var(--gold);
   border-radius: 8px;
   box-shadow: var(--shadow);
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.35;
   pointer-events: none;
   white-space: pre-wrap;
 }
+.tooltip.rich { white-space: normal; }
+.tip-name { color: var(--gold); font-size: 15px; line-height: 1.2; margin: 0 0 2px; }
+.tip-flavor { font-style: italic; color: var(--ash); font-size: 12px; line-height: 1.3; margin: 0 0 6px; }
+.tip-rows { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 3px 8px; margin: 0; }
+.tip-rows dt { color: var(--gold); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; line-height: 1.35; }
+.tip-rows dd { margin: 0; }
+.habit { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.level-opt .tip-flavor { margin-top: 4px; }
+.level-opt .tip-rows { margin-top: 6px; }
 .level-layout {
   width: min(980px, 100%);
   margin: 18px auto 0;
@@ -2087,7 +2096,7 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
       const unknown = (def.learn || []).filter((id) => ch.known.indexOf(id) < 0 && canLearn(ch, id));
       if (unknown.length) {
         const moveId = unknown[irand(unknown.length)];
-        bag.push({ kind: "move", moveId: moveId, label: "Learn " + MOVES[moveId].name, detail: "A new " + (MOVES[moveId].school === "spell" ? "spell" : "technique") + " from the " + def.title + " schooling. " + describeMove(ch, moveId) });
+        bag.push({ kind: "move", moveId: moveId, label: "Learn " + MOVES[moveId].name, detail: (MOVES[moveId].flavor || "A lesson from the " + def.title + ".") });
       }
       if ((def.abilitySlots || 0) > 0 && slotCount(ch, "technique") < 4) {
         bag.push({ kind: "slot", school: "technique", label: "+1 technique slot", detail: "Room to keep another technique ready. You still choose which one is slotted." });
@@ -2095,8 +2104,8 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
       if ((def.spellSlots || 0) > 0 && slotCount(ch, "spell") < 4) {
         bag.push({ kind: "slot", school: "spell", label: "+1 spell slot", detail: "Room to keep another spell ready." });
       }
-      if (!(ch.perks && ch.perks.undead)) bag.push({ kind: "perk", perk: "undead", amt: 1, label: "Grave-spite", detail: "+1 damage against the risen, hounds, and the Choir." });
-      if (!(ch.perks && ch.perks.leech)) bag.push({ kind: "perk", perk: "leech", amt: 1, label: "Leech habit", detail: "Heal 1 whenever you land a blow." });
+      if (!(ch.perks && ch.perks.undead)) bag.push({ kind: "perk", perk: "undead", amt: 1, label: "Grave-spite", detail: "The dead are a little easier to unmake." });
+      if (!(ch.perks && ch.perks.leech)) bag.push({ kind: "perk", perk: "leech", amt: 1, label: "Leech habit", detail: "The blow feeds you, a little." });
       if (def.primary && def.primary !== "might" && def.primary !== "defense" && def.primary !== "speed") {
         bag.push({ kind: "stat", stat: def.primary, amt: 1, label: "+1 " + statLabel(def.primary), detail: "The class's own strength, deepened by a point." });
       }
@@ -3063,34 +3072,131 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     const target = { defense: 3, statuses: [], guard: 0, tags: [] };
     return computeDmg(actor, target, move);
   }
-  function describeMove(ch, moveId) {
+  function signed(n) {
+    if (!n) return "";
+    return n > 0 ? " + " + n : " − " + Math.abs(n);
+  }
+  function actorNums(ch) {
+    if (ch && ch.classId) return statsOf(ch);
+    return { might: 4, arcana: 4, maxHp: 20, undead: 0 };
+  }
+  function restoreLine(ch, n) {
+    const def = ch && ch.classId ? ROSTER[ch.classId] : null;
+    if (def && def.stam && def.mana) return "Regain " + n + " stamina, and 1 mana.";
+    if (def && def.mana && !def.stam) return "Regain " + n + " mana.";
+    if (def && def.stam) return "Regain " + n + " stamina.";
+    return "Regain " + n + " stamina, or mana if you have no stamina.";
+  }
+  function moveSheet(ch, moveId) {
     const m = MOVES[moveId];
-    if (!m) return "";
-    const bits = [];
-    if (m.flavor) bits.push(m.flavor);
-    if (m.cost) bits.push("Costs " + m.cost + " " + (m.pool === "mana" ? "mana" : m.pool === "stamina" ? "stamina" : "") + ".");
-    else bits.push("Costs nothing.");
-    if (m.cd >= 2) bits.push("Then it rests for " + (m.cd - 1) + " of their turns.");
+    if (!m) return null;
+    const self = m.target === "self";
+    const nums = actorNums(ch);
+    const rows = [];
+    if (m.kind === "guard" || (m.damage === false && !m.heal && m.buffMight)) {
+      rows.push({ h: "Effect", t: self ? "No blow at the foe. It works on you." : "No direct blow." });
+    } else if (m.damage && m.kind !== "guard") {
+      rows.push({ h: "Effect", t: (m.hits || 1) > 1 ? "Strike the foe " + m.hits + " times." : "Strike the foe once." });
+    } else if (m.heal) {
+      rows.push({ h: "Effect", t: "Mend yourself. No blow." });
+    } else {
+      rows.push({ h: "Effect", t: "A working on " + (self ? "you" : "the foe") + "." });
+    }
     if (m.damage && m.kind !== "guard") {
       const est = estimateDamage(ch, m);
-      const hits = (m.hits || 1) > 1 ? (m.hits + " hits. ") : "";
-      if (est) bits.push(hits + "About " + est + " damage" + ((m.hits || 1) > 1 ? " each" : "") + " against a typical foe (Defense 3).");
-      if (m.undeadBonus) bits.push("+" + m.undeadBonus + " more against the dead.");
-      if (m.pierce) bits.push("Ignores " + m.pierce + " points of the armor's mitigation.");
+      let line;
+      if (m.stat === "flat") line = "Flat " + (m.flat || 1) + ". Armor does not reduce it.";
+      else {
+        const statName = m.stat === "arcana" ? "Arcana" : "Might";
+        line = statName + signed(m.bonus) + ", about " + est + " now" + ((m.hits || 1) > 1 ? " each" : "") + ". Half their Defense comes off first" + (m.pierce ? ", ignoring " + m.pierce + " of that" : "") + " (this guess uses Defense 3).";
+      }
+      if (m.stat === "flat" && est != null) line += " About " + est + " now.";
+      if (m.missing) line += " Add 1 for every 6 HP you are missing.";
+      if (m.undeadBonus) line += " +" + m.undeadBonus + " if they are risen, a hound, or the Choir.";
+      if (nums.undead) line += " Your gear or grave-spite adds another " + nums.undead + " against the dead.";
+      if ((m.hits || 1) > 1 && m.stat !== "flat") line += " A brace on them softens only the first hit.";
+      rows.push({ h: "Damage", t: line });
     }
-    if (m.kind === "guard") bits.push("Braces. The next blow is cut to about " + Math.round((m.guard == null ? 0.5 : m.guard) * 100) + " percent.");
-    if (m.heal) bits.push(m.heal === "arcana" ? "Heals from Arcana, a handful of points." : "Heals " + m.heal + ".");
-    if (m.poison) bits.push("Poison for " + m.poison.d + " at the start of the foe's next " + m.poison.t + " turns.");
-    if (m.stun) bits.push("May stagger them out of their next turn.");
-    if (m.weak) bits.push("Weakens their blows for " + m.weak + " of their turns.");
-    if (m.hex) bits.push("Hex. Their Defense falls by 2 for " + m.hex + " turns.");
-    if (m.slow) bits.push("Pins them. Speed falls for " + m.slow + " turns.");
-    if (m.selfDmg) bits.push("They pay " + m.selfDmg + " of their own blood.");
-    if (m.leech) bits.push("They heal for the damage dealt.");
-    if (m.buffMight) bits.push("+" + m.buffMight + " Might for " + (m.buffTurns || 3) + " turns.");
-    if (m.restore) bits.push("Restores " + m.restore + " stamina, or mana for a caster.");
-    if (m.counter) bits.push(m.counter === "might" ? "The next blow is answered." : "The next blow is answered for " + m.counter + ".");
-    return bits.join(" ");
+    if (m.kind === "guard") {
+      const pct = Math.round((m.guard == null ? 0.5 : m.guard) * 100);
+      rows.push({ h: "Brace", t: "The next blow is cut to " + pct + "%. It also ends at the start of your next turn if nothing hits you." });
+    }
+    if (m.heal) {
+      if (m.heal === "arcana") {
+        const n = Math.max(4, Math.floor(nums.arcana * 0.7) + 3);
+        rows.push({ h: "Heal", t: "Arcana × 0.7 + 3, and at least 4. About " + n + " now." });
+      } else rows.push({ h: "Heal", t: m.heal + " HP." });
+    }
+    if (!m.cost || m.pool === "none") rows.push({ h: "Cost", t: "Nothing." });
+    else rows.push({ h: "Cost", t: m.cost + " " + (m.pool === "mana" ? "mana" : "stamina") + "." });
+    if (m.cd >= 2) {
+      const rest = m.cd - 1;
+      rows.push({ h: "Rest", t: rest === 1 ? "Not ready on your next turn." : "Not ready for your next " + rest + " turns." });
+    }
+    rows.push({ h: "Target", t: self ? "You." : "The foe in front of you. Fights are one against one." });
+    const marks = [];
+    if (m.poison) marks.push("Rot: " + m.poison.d + " at the start of each of their next " + m.poison.t + " turns.");
+    if (m.stun) marks.push(Math.round(m.stun * 100) + "% chance they lose their next turn.");
+    if (m.weak) marks.push("Weak for " + m.weak + " of their turns. Their blows hit for 2 less.");
+    if (m.hex) marks.push("Hex for " + m.hex + " of their turns. Defense is 2 lower.");
+    if (m.slow) marks.push("Pinned for " + m.slow + " of their turns. Speed is 4 lower.");
+    if (m.buffMight) {
+      const turns = Math.max(1, (m.buffTurns || 3) - 1);
+      marks.push("+" + m.buffMight + " Might through your next " + turns + " turn" + (turns === 1 ? "" : "s") + ". It fades at the end of each of your turns, including this one.");
+    }
+    if (marks.length) rows.push({ h: "Status", t: marks.join(" ") });
+    if (m.selfDmg) rows.push({ h: "Price", t: "You lose " + m.selfDmg + " HP when you use it." });
+    if (m.leech) rows.push({ h: "Leech", t: "You heal for the damage each hit deals. A leech habit does not add on top of this." });
+    if (m.restore) rows.push({ h: "Restore", t: restoreLine(ch, m.restore) });
+    if (m.counter) {
+      if (m.counter === "might") {
+        const rip = Math.max(2, Math.round(nums.might * 0.6));
+        rows.push({ h: "Riposte", t: "The next blow against you is answered once, for 60% of your Might (at least 2). About " + rip + " now." });
+      } else rows.push({ h: "Riposte", t: "The next blow against you is answered once, for " + m.counter + "." });
+    }
+    const school = m.school === "spell" ? "spell" : "technique";
+    let gambit;
+    if (m.id === "attack" || m.id === "defend") {
+      gambit = "Always legal, even with an empty slot. Name it as a gambit action. If no row can be paid, they Attack, or Defend when Attack is impossible.";
+    } else {
+      gambit = "Slot this " + school + ", then set a gambit action to " + m.name + ". Rows run top to bottom. It fires only if that row is the first match and you can pay" + (m.cd >= 2 ? ", and it is not resting" : "") + ".";
+    }
+    rows.push({ h: "Gambit", t: gambit });
+    return { name: m.name, flavor: m.flavor || "", rows: rows };
+  }
+  function perkSheet(id) {
+    if (id === "leech") {
+      return {
+        name: "Leech habit",
+        flavor: "The blow feeds you, a little.",
+        rows: [
+          { h: "Effect", t: "Each damaging hit you land heals you." },
+          { h: "Numbers", t: "Heal 1 per hit. If the blow already leeches, this does not add on top." },
+          { h: "Cost", t: "Nothing. It is always on." },
+          { h: "Target", t: "You, when your hit lands on the foe." },
+          { h: "Gambit", t: "Not an action. Any gambit that lands a blow triggers it." },
+        ],
+      };
+    }
+    if (id === "undead") {
+      return {
+        name: "Grave-spite",
+        flavor: "The dead are a little easier to unmake.",
+        rows: [
+          { h: "Effect", t: "Your damaging hits bite harder on the dead." },
+          { h: "Numbers", t: "+1 damage on each hit against the risen, hounds, and the Choir." },
+          { h: "Cost", t: "Nothing. It is always on." },
+          { h: "Target", t: "Undead foes only." },
+          { h: "Gambit", t: "Not an action. It rides on whatever blow the gambit chooses." },
+        ],
+      };
+    }
+    return null;
+  }
+  function describeMove(ch, moveId) {
+    const sheet = moveSheet(ch, moveId);
+    if (!sheet) return "";
+    return (sheet.flavor ? sheet.flavor + " " : "") + sheet.rows.map((r) => r.h + ": " + r.t).join(" ");
   }
   function gearTip(defId) {
     const g = GEAR[defId];
@@ -3179,7 +3285,7 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     regionName: regionName, nodeLabel: nodeLabel, gearBlurb: gearBlurb, moveBlurb: moveBlurb,
     previewStats: previewStats, xpNeed: xpNeed, person: person, statLabel: statLabel,
     chooseClass: chooseClass, renameMember: renameMember, classKeys: classKeys, sanitizeName: sanitizeName,
-    pickLevelOption: pickLevelOption, describeMove: describeMove, statTip: statTip, nodeTip: nodeTip,
+    pickLevelOption: pickLevelOption, describeMove: describeMove, moveSheet: moveSheet, perkSheet: perkSheet, statTip: statTip, nodeTip: nodeTip,
     condTip: condTip, gearTip: gearTip, slotCount: slotCount,
     reaches: reaches, livingParty: livingParty,
   };
@@ -3212,6 +3318,28 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
   function tipAttr(text) {
     if (!text) return "";
     return " data-tip=\"" + esc(text) + "\"";
+  }
+  function moveAttrs(ch, moveId) {
+    const mv = moveId && AC.MOVES[moveId];
+    if (!mv) return "";
+    return " data-move=\"" + esc(moveId) + "\" data-uid=\"" + esc(ch.uid) + "\" data-tip=\"" + esc(mv.name) + "\"";
+  }
+  function perkAttrs(id) {
+    const sheet = AC.perkSheet(id);
+    if (!sheet) return "";
+    return " data-perk=\"" + esc(id) + "\" data-tip=\"" + esc(sheet.name) + "\"";
+  }
+  function sheetHtml(sheet, withName) {
+    if (!sheet) return "";
+    const rows = sheet.rows.map((r) => "<dt>" + esc(r.h) + "</dt><dd>" + esc(r.t) + "</dd>").join("");
+    return (withName ? '<div class="tip-name">' + esc(sheet.name) + "</div>" : "") +
+      (sheet.flavor ? '<p class="tip-flavor">' + esc(sheet.flavor) + "</p>" : "") +
+      '<dl class="tip-rows">' + rows + "</dl>";
+  }
+  function lessonBody(ch, opt) {
+    if (opt.kind === "move" && opt.moveId) return sheetHtml(AC.moveSheet(ch, opt.moveId), false);
+    if (opt.kind === "perk" && opt.perk) return sheetHtml(AC.perkSheet(opt.perk), false);
+    return "<div>" + esc(opt.detail || "") + "</div>";
   }
   function portrait(key, alt) {
     const src = key && typeof PORTRAITS !== "undefined" && PORTRAITS[key];
@@ -3321,14 +3449,8 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     return k;
   }
   function classTip(def) {
-    const fake = {
-      classId: def.id, level: 2, hp: 1,
-      bonus: {}, perks: {},
-      equip: { weapon: { defId: def.weapon }, armor: { defId: def.armor }, trinket: null },
-    };
-    fake.hp = AC.statsOf(fake).maxHp;
-    const moves = (def.start || []).map((id) => AC.MOVES[id].name + ": " + AC.describeMove(fake, id)).join(" ");
-    return def.title + ". " + def.blurb + " " + def.play + (moves ? " " + moves : "");
+    const moves = (def.start || []).map((id) => AC.MOVES[id].name).join(", ");
+    return def.title + ". " + def.blurb + " " + def.play + (moves ? " Starts with " + moves + "." : "");
   }
 
   function viewLevelUp() {
@@ -3338,8 +3460,9 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     const ch = s.party.find((p) => p.uid === up.uid) || s.party[0];
     const d = person(ch);
     const cards = up.options.map((opt, i) => {
-      return '<button class="choice level-opt" data-act="level-pick" data-i="' + i + '"' + tipAttr(opt.detail || opt.label) + ">" +
-        "<b>" + esc(opt.label) + "</b><div>" + esc(opt.detail || "") + "</div></button>";
+      const hook = opt.kind === "move" && opt.moveId ? moveAttrs(ch, opt.moveId) : (opt.kind === "perk" && opt.perk ? perkAttrs(opt.perk) : tipAttr(opt.detail || opt.label));
+      return '<button class="choice level-opt" data-act="level-pick" data-i="' + i + '"' + hook + ">" +
+        "<b>" + esc(opt.label) + "</b>" + lessonBody(ch, opt) + "</button>";
     }).join("");
     return '<div class="muster-screen"><div class="wordmark"><span class="kicker">Level ' + up.level + "</span>" +
       "<h1 style=\"font-size:clamp(36px,6vw,56px)\">" + esc(ch.name) + "</h1>" +
@@ -3546,7 +3669,7 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
       chipDark("Defense", st.defense) + chipDark("Speed", st.speed) +
       (st.staminaMax ? chipDark("Stamina", st.staminaMax) : "") +
       (st.manaMax ? chipDark("Mana", st.manaMax) : "") + "</div>" +
-      '<p class="muted">' + esc(d.play) + "</p>" + order +
+      '<p class="muted">' + esc(d.play) + "</p>" + habitBlock(ch) + order +
       '<div class="block"><button class="btn small" data-act="bandage" data-uid="' + ch.uid + '"' + ((s.consumables.bandage || 0) ? "" : " disabled") + ">Use bandage (" + (s.consumables.bandage || 0) + ")</button> " +
       '<button class="btn small ghost" data-act="tonic"' + ((s.consumables.tonic || 0) ? "" : " disabled") + ">Tonic (" + (s.consumables.tonic || 0) + ")</button></div>" +
       '<p><button class="btn" data-act="close">Back to the road</button></p></div>' +
@@ -3596,8 +3719,8 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
         if (taken) return "";
         return '<option value="' + id + '"' + (cur === id ? " selected" : "") + ">" + esc(AC.MOVES[id].name) + " — " + esc(AC.moveBlurb(id)) + "</option>";
       })).join("");
-      const moveTip = cur ? AC.describeMove(ch, cur) : "An empty slot. What is slotted here can be chosen by a gambit.";
-      html += '<label' + tipAttr(moveTip) + '>Slot ' + (i + 1) + '<select data-act="slot" data-uid="' + ch.uid + '" data-school="' + (school === "spell" ? "spell" : "technique") + '" data-i="' + i + '">' + opts + "</select></label>";
+      const hook = cur ? moveAttrs(ch, cur) : tipAttr("An empty slot. What is slotted here can be chosen by a gambit.");
+      html += "<label" + hook + ">Slot " + (i + 1) + '<select data-act="slot" data-uid="' + ch.uid + '" data-school="' + (school === "spell" ? "spell" : "technique") + '" data-i="' + i + '">' + opts + "</select></label>";
     }
     if (!known.length) html += '<p class="muted">Nothing learned for these slots yet.</p>';
     return html;
@@ -3616,10 +3739,9 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     const actList = acts.slice();
     if (g.act && actList.indexOf(g.act) < 0 && AC.MOVES[g.act]) actList.push(g.act);
     const actOpts = '<option value="">—</option>' + actList.map((id) => '<option value="' + id + '"' + (id === g.act ? " selected" : "") + ">" + esc(AC.MOVES[id].name) + "</option>").join("");
-    const gtip = AC.condTip(g.cond) + (g.act ? " Action: " + (AC.MOVES[g.act] ? AC.MOVES[g.act].name + ". " + AC.describeMove(ch, g.act) : g.act) : " No action in this row, so it is skipped.");
-    return '<div class="gambit"' + tipAttr(gtip) + '><span>' + (i + 1) + '</span>' +
+    return '<div class="gambit"' + tipAttr(AC.condTip(g.cond)) + '><span>' + (i + 1) + '</span>' +
       '<select data-act="gcond" data-uid="' + ch.uid + '" data-i="' + i + '"' + tipAttr(AC.condTip(g.cond)) + ">" + condOpts + "</select>" +
-      '<select class="act" data-act="gact" data-uid="' + ch.uid + '" data-i="' + i + '"' + tipAttr(g.act && AC.MOVES[g.act] ? AC.describeMove(ch, g.act) : "No action. The rule is skipped.") + ">" + actOpts + "</select>" +
+      '<select class="act" data-act="gact" data-uid="' + ch.uid + '" data-i="' + i + '"' + (g.act && AC.MOVES[g.act] ? moveAttrs(ch, g.act) : tipAttr("No action. The rule is skipped.")) + ">" + actOpts + "</select>" +
       '<button class="btn small" data-act="gup" data-uid="' + ch.uid + '" data-i="' + i + '" aria-label="Move gambit up">↑</button>' +
       '<button class="btn small" data-act="gdown" data-uid="' + ch.uid + '" data-i="' + i + '" aria-label="Move gambit down">↓</button></div>';
   }
@@ -3629,7 +3751,9 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     if (!m || m.type !== "tome") return "";
     const mv = AC.MOVES[m.moveId];
     const cands = AC.state.party.filter((ch) => AC.canLearn(ch, m.moveId));
-    return '<div class="help-pop"><div class="help-card parchment"><h2>Who studies ' + esc(mv.name) + '?</h2><p>' + esc(AC.moveBlurb(m.moveId)) + '</p><div class="choice-list">' +
+    const reader = cands[0] || AC.state.party[0];
+    return '<div class="help-pop"><div class="help-card parchment"><h2>Who studies ' + esc(mv.name) + '?</h2>' +
+      '<div' + moveAttrs(reader, m.moveId) + ">" + sheetHtml(AC.moveSheet(reader, m.moveId), false) + '</div><div class="choice-list">' +
       cands.map((ch) => '<button class="btn" data-act="tome-who" data-uid="' + ch.uid + '">' + esc(person(ch).name) + "</button>").join("") +
       '</div><p><button class="btn ghost" data-act="tome-cancel">Not now</button></p></div></div>';
   }
@@ -3641,19 +3765,28 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
       let title = "";
       let body = "";
       let kind = "";
+      let extra = "";
+      let hook = "";
       if (g.kind === "gear") {
         const gear = AC.GEAR[g.defId];
         title = gear.name; kind = gear.slot; body = AC.gearBlurb(g.defId) + " — " + gear.text;
+        hook = tipAttr(body);
       } else if (g.kind === "tome") {
-        title = AC.MOVES[g.moveId].name; kind = "manual"; body = AC.moveBlurb(g.moveId);
+        const who = s.party.find((ch) => AC.canLearn(ch, g.moveId)) || s.party[0];
+        title = AC.MOVES[g.moveId].name; kind = "manual";
+        extra = sheetHtml(AC.moveSheet(who, g.moveId), false);
+        hook = moveAttrs(who, g.moveId);
       } else if (g.kind === "bandage") {
         title = "Linen bandage"; kind = "supply"; body = "Restore 8 HP, or wake a downed mercenary at 8.";
+        hook = tipAttr(body);
       } else {
         title = "Bitter tonic"; kind = "supply"; body = "Restore 6 HP to each mercenary still standing.";
+        hook = tipAttr(body);
       }
       const afford = s.gold >= g.price && !g.sold;
-      return '<article class="offer' + (g.sold ? " sold" : "") + '"><div class="kind">' + kind + "</div><h3>" + esc(title) + "</h3><p>" + esc(body) + '</p><p class="gold">' + g.price + ' gold</p>' +
-        '<button class="btn small" data-act="buy" data-i="' + i + '"' + tipAttr(body) + (afford ? "" : " disabled") + ">" + (g.sold ? "Sold" : "Buy") + "</button></article>";
+      return '<article class="offer' + (g.sold ? " sold" : "") + '"><div class="kind">' + kind + "</div><h3>" + esc(title) + "</h3>" +
+        (extra || ("<p>" + esc(body) + "</p>")) + '<p class="gold">' + g.price + ' gold</p>' +
+        '<button class="btn small" data-act="buy" data-i="' + i + '"' + hook + (afford ? "" : " disabled") + ">" + (g.sold ? "Sold" : "Buy") + "</button></article>";
     }).join("");
     return '<div class="offers"><div class="kicker">Sutler</div><h2>What the blanket holds</h2>' +
       '<div class="offer-grid">' + (cards || '<p class="muted">The blanket is bare.</p>') + "</div>" + tomePicker() + "</div>";
@@ -3758,7 +3891,8 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     if (r.tome && !r.tome.done) {
       const mv = AC.MOVES[r.tome.moveId];
       const cands = s.party.filter((ch) => AC.canLearn(ch, r.tome.moveId));
-      tome = "<h3>A manual: " + esc(mv.name) + "</h3><p>" + esc(AC.moveBlurb(r.tome.moveId)) + "</p><div class=\"choice-list\">" +
+      const reader = cands[0] || s.party[0];
+      tome = "<h3>A manual: " + esc(mv.name) + "</h3><div" + moveAttrs(reader, r.tome.moveId) + ">" + sheetHtml(AC.moveSheet(reader, r.tome.moveId), false) + "</div><div class=\"choice-list\">" +
         (cands.length ? cands.map((ch) => '<button class="btn" data-act="learn-who" data-uid="' + ch.uid + '">' + esc(person(ch).name) + " studies it</button>").join(" ") : "<p>No one in the company can use it. It will be left if you walk on.</p>") +
         "</div>";
     } else if (r.tome && r.tome.who) {
@@ -3881,11 +4015,33 @@ const PORTRAITS = {"oathsworn-knight-0":"data:image/webp;base64,UklGRiDGAABXRUJQ
     const tip = document.getElementById("tip");
     if (tip) tip.hidden = true;
   }
+  function habitBlock(ch) {
+    const ids = ["leech", "undead"].filter((id) => ch.perks && ch.perks[id]);
+    if (!ids.length) return "";
+    return '<div class="block"><h3>Habits</h3>' + ids.map((id) => {
+      return '<div class="habit"' + perkAttrs(id) + ">" + sheetHtml(AC.perkSheet(id), true) + "</div>";
+    }).join("") + "</div>";
+  }
+  function richTip(el) {
+    if (!el) return "";
+    const uid = el.getAttribute("data-uid");
+    const ch = uid && AC.state && AC.state.party ? AC.state.party.find((p) => p.uid === uid) : null;
+    if (el.hasAttribute("data-move")) return sheetHtml(AC.moveSheet(ch, el.getAttribute("data-move")), true);
+    if (el.hasAttribute("data-perk")) return sheetHtml(AC.perkSheet(el.getAttribute("data-perk")), true);
+    return "";
+  }
   function showTip(el) {
+    const rich = richTip(el);
     const text = el && el.getAttribute("data-tip");
-    if (!text) return;
+    if (!rich && !text) return;
     const tip = ensureTip();
-    tip.textContent = text;
+    if (rich) {
+      tip.innerHTML = rich;
+      tip.classList.add("rich");
+    } else {
+      tip.textContent = text;
+      tip.classList.remove("rich");
+    }
     tip.hidden = false;
     const r = el.getBoundingClientRect();
     const w = tip.offsetWidth;
